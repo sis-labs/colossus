@@ -1,23 +1,16 @@
 package colossus
 package service
 
-
 import java.net.InetSocketAddress
-
 import akka.actor._
 import akka.event.Logging
 import colossus.controller._
 import colossus.core._
 import colossus.metrics._
-
 import scala.collection.mutable
 import scala.concurrent.duration._
-import scala.concurrent.{Future, Promise}
 import scala.language.higherKinds
 import scala.util.{Failure, Success, Try}
-
-import com.github.nscala_time.time.Imports.DateTime
-
 
 /**
  * Configuration used to specify a Client's parameters
@@ -35,8 +28,8 @@ import com.github.nscala_time.time.Imports.DateTime
  *
  */
 case class ClientConfig(
-  address: InetSocketAddress, 
-  requestTimeout: Duration, 
+  address: InetSocketAddress,
+  requestTimeout: Duration,
   name: MetricAddress,
   pendingBufferSize: Int = 100,
   sentBufferSize: Int = 100,
@@ -101,11 +94,12 @@ class StaleClientException(msg : String) extends Exception(msg)
  * that accepts a worker
  */
 class ServiceClient[I,O](
-  codec: Codec[I,O], 
+  codec: Codec[I,O],
   val config: ClientConfig,
   val worker: WorkerRef
 )(implicit tagDecorator: TagDecorator[I,O] = TagDecorator.default[I,O])
-extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config.requestTimeout)) with ClientConnectionHandler with ServiceClientLike[I,O] with ManualUnbindHandler{
+extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config.requestTimeout))
+with ClientConnectionHandler with ServiceClientLike[I,O] with ManualUnbindHandler{
 
   import colossus.core.WorkerCommand._
   import config._
@@ -120,14 +114,16 @@ extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config
   private val connectionFailures    = worker.metrics.getOrAdd(Rate(name / "connection_failures"))
   private val disconnects  = worker.metrics.getOrAdd(Rate(name / "disconnects"))
   private val latency = worker.metrics.getOrAdd(Histogram(name / "latency", sampleRate = 0.10, percentiles = List(0.75,0.99)))
+  private val queueTime = worker.metrics.getOrAdd(Histogram(name / "queue_time", sampleRate = 0.10, percentiles = List(0.75,0.99)))
   lazy val log = Logging(worker.system.actorSystem, s"client:$address")
 
   private val responseTimeoutMillis: Long = config.requestTimeout.toMillis
 
   case class SourcedRequest(message: I, handler: ResponseHandler) {
-    val start: Long = System.currentTimeMillis
+    val queued: Long = System.currentTimeMillis
+    var sent: Long = -1
 
-    def isTimedOut(now: Long) = now > (start + responseTimeoutMillis)
+    def isTimedOut(now: Long) = now > (queued + responseTimeoutMillis)
   }
 
 
@@ -147,7 +143,7 @@ extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config
    * @return Underlying WriteEndpoint's ConnectionStatus, defaults to Connecting if there is no WriteEndpoint
    */
   def connectionStatus: ConnectionStatus = if (isConnected) {
-    ConnectionStatus.Connected 
+    ConnectionStatus.Connected
   } else if (canReconnect && !manuallyDisconnected) {
     ConnectionStatus.Connecting
   } else {
@@ -193,14 +189,13 @@ extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config
   def processMessage(response: O) {
     val now = System.currentTimeMillis
     try {
-      val source = sentBuffer.dequeue()
-      latency.add(tags = hTags, value = (now - source.start).toInt) //notice only grouping by host for now
+      val source: SourcedRequest = sentBuffer.dequeue()
+      latency.add(tags = hTags, value = (now - source.sent).toInt) //notice only grouping by host for now
       source.handler(Success(response))
       requests.hit(tags = hpTags)
     } catch {
-      case e: java.util.NoSuchElementException => {
+      case e: java.util.NoSuchElementException =>
         throw new DataException(s"No Request for response ${response.toString}!")
-      }
     }
     checkGracefulDisconnect()
     if (!writesEnabled) resumeWrites()
@@ -233,16 +228,14 @@ extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config
   override protected def connectionLost(cause : DisconnectError) {
     super.connectionLost(cause)
     cause match {
-      case DisconnectCause.ConnectFailed(error) => {
+      case DisconnectCause.ConnectFailed(error) =>
         log.warning(s"${id.get} failed to connect to ${address.toString}: ${error.getMessage}")
         connectionFailures.hit(tags = hpTags)
         purgeBuffers(new NotConnectedException(s"${cause.logString}"))
-      }
-      case _ => {
+      case _ =>
         log.warning(s"${id.get} connection lost to ${address.toString}: ${cause.logString}")
         disconnects.hit(tags = hpTags + ("cause" -> cause.tagString))
         purgeBuffers(new ConnectionLostException(s"${cause.logString}"))
-      }
     }
     attemptReconnect()
   }
@@ -271,15 +264,19 @@ extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config
       // don't allow any new requests, appear as if we're dead
       failRequest(s, new NotConnectedException("Not Connected"))
     } else if (isConnected || !failFast) {
-      val pushed = push(s.message, s.start){
-        case OutputResult.Success         => {
-          sentBuffer.enqueue(s)
-          if (sentBuffer.size >= config.sentBufferSize) {
-            pauseWrites() //writes resumed in processMessage
-          }
+      val now = System.currentTimeMillis
+      val pushed = push(s.message, s.queued){ result =>
+        queueTime.add(tags = hTags, value = (now - s.queued).toInt)
+        result match {
+          case OutputResult.Success =>
+            s.sent = now
+            sentBuffer.enqueue(s)
+            if (sentBuffer.size >= config.sentBufferSize) {
+              pauseWrites() //writes resumed in processMessage
+            }
+          case OutputResult.Failure(err) => failRequest(s, err)
+          case OutputResult.Cancelled(err) => failRequest(s, err)
         }
-        case OutputResult.Failure(err)    => failRequest(s, err)
-        case OutputResult.Cancelled(err)  => failRequest(s, err)
       }
       if (!pushed) {
         failRequest(s, new ClientOverloadedException(s"Error sending ${s.message}: Client is overloaded"))
@@ -291,7 +288,7 @@ extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config
   }
 
   private def checkGracefulDisconnect() {
-    if (isConnected && disconnecting && sentBuffer.size == 0) {
+    if (isConnected && disconnecting && sentBuffer.isEmpty) {
       super.gracefulDisconnect()
     }
   }
@@ -300,7 +297,7 @@ extends Controller[O,I](codec, ControllerConfig(config.pendingBufferSize, config
   override def idleCheck(period: Duration) {
     super.idleCheck(period)
 
-    if (sentBuffer.size > 0 && sentBuffer.front.isTimedOut(System.currentTimeMillis)) {
+    if (sentBuffer.nonEmpty && sentBuffer.front.isTimedOut(System.currentTimeMillis)) {
       // the oldest sent message has expired with no response - kill the connection
       // sending the Kill message instead of disconnecting will trigger the reconnection logic
       worker ! Kill(id.get, DisconnectCause.TimedOut)
