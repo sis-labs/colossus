@@ -164,7 +164,7 @@ private[colossus] class Worker(config: WorkerConfig) extends Actor with ActorLog
   val rejectedConnections     = Rate(io.namespace / "worker" / "rejected_connections")
 
   val selector: Selector = Selector.open()
-  val buffer = ByteBuffer.allocateDirect(1024 * 128)
+  val buffer = ByteBuffer.allocate(1024 * 128)
 
   val outputBuffer = new DynamicOutBuffer(1024 * 1024 * 4)
 
