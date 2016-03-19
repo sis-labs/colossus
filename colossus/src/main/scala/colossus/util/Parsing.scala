@@ -169,6 +169,16 @@ trait IntegerParser{self: UnsizedParseBuffer =>
 
  */
 object Combinators {
+
+  class MapParser[A,B](orig: Parser[A], f: A => B) extends Parser[B] {
+    def parse(data: DataBuffer) = orig.parse(data) match {
+      case Some(r) => Some(f(r))
+      case None => None
+    }
+    override def endOfStream() = orig.endOfStream().map(f)
+  }
+
+
   trait Parser[+T] {
     def parse(data: DataBuffer): Option[T]
 
@@ -236,13 +246,8 @@ object Combinators {
 
 
     
-    def >>[B](f: T => B): Parser[B] = {
-      val orig = this
-      new Parser[B]{
-        def parse(data: DataBuffer) = orig.parse(data).map{r => f(r)}
-        override def endOfStream() = orig.endOfStream().map(f)
-      }
-    }
+    def >>[B](f: T => B): Parser[B] = new MapParser[T,B](this, f)
+    
     def map[B](f: T => B): Parser[B] = >>(f)
 
     def |>[B](f: T => Parser[B]): Parser[B] = {

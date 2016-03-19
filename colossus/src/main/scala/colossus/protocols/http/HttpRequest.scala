@@ -3,7 +3,20 @@ package protocols.http
 
 import akka.util.ByteString
 
-case class HttpRequestHead(method: HttpMethod, url: String, version: HttpVersion, headers: HttpHeaders) {
+trait FirstLine {
+  def method : HttpMethod
+  def path : String
+  def version : HttpVersion
+}
+
+case class BuildFL(method: HttpMethod, path: String, version: HttpVersion) extends FirstLine
+
+
+case class HttpRequestHead(firstLine: FirstLine, headers: HttpHeaders) {
+
+  lazy val method = firstLine.method
+  lazy val url = firstLine.path
+  lazy val version = firstLine.version
 
   lazy val (path, query) = {
     val pieces = url.split("\\?",2)
@@ -53,6 +66,14 @@ case class HttpRequestHead(method: HttpMethod, url: String, version: HttpVersion
 
 }
 
+object HttpRequestHead {
+  
+  def apply(method: HttpMethod, url: String, version: HttpVersion, headers: HttpHeaders): HttpRequestHead = {
+    HttpRequestHead(BuildFL(method, url, version), headers)
+
+  }
+}
+
 case class HttpRequest(head: HttpRequestHead, body: HttpBody) extends core.Encoder {
   import head._
   import HttpCodes._
@@ -85,9 +106,13 @@ case class HttpRequest(head: HttpRequestHead, body: HttpBody) extends core.Encod
 
 object HttpRequest {
 
-  def apply[T : HttpBodyEncoder](method: HttpMethod, url: String, body: T): HttpRequest = {
-    val head = HttpRequestHead(method, url, HttpVersion.`1.1`, HttpHeaders.Empty)
+  def apply[T : HttpBodyEncoder](method: HttpMethod, url: String, headers: HttpHeaders, body: T): HttpRequest = {
+    val head = HttpRequestHead(BuildFL(method, url, HttpVersion.`1.1`), headers)
     HttpRequest(head, HttpBody(body))
+  }
+
+  def apply[T : HttpBodyEncoder](method: HttpMethod, url: String, body: T): HttpRequest = {
+    HttpRequest(method, url, HttpHeaders.Empty, body)
   }
 
   def get(url: String) = HttpRequest(HttpMethod.Get, url, HttpBody.NoBody)
