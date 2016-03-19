@@ -189,15 +189,17 @@ sealed trait ParsedHeaderLine
 
 case object EndLine extends ParsedHeaderLine
 
-case class FastParseHeader(data: Array[Byte], valueStart: Int) extends HttpHeader with ParsedHeaderLine{
+case class FastParseHeader(data: Array[Byte]) extends HttpHeader with ParsedHeaderLine{
 
+  lazy val valueStart = data.indexOf(':'.toByte) + 1
   lazy val key = new String(data, 0, valueStart - 1).toLowerCase
   lazy val value = new String(data, valueStart, data.length - valueStart).trim
   lazy val encoded = data ++ Array('\r'.toByte, '\n'.toByte)
 }
 object FastParseHeader {
   
-  def apply(data: Array[Byte], segments: Array[Int]): ParsedHeaderLine = if (data.size == 0) EndLine else FastParseHeader(data, segments(0))
+  //def apply(data: Array[Byte], segments: Array[Int]): ParsedHeaderLine = if (data.size == 0) EndLine else FastParseHeader(data, segments(0))
+  def make(data: Array[Byte]): ParsedHeaderLine = if (data.size == 0) EndLine else FastParseHeader(data)
 
   implicit object Zero extends Zero[ParsedHeaderLine, FastParseHeader] {
     def isZero(t: ParsedHeaderLine) = t == EndLine
@@ -241,6 +243,65 @@ class RepeatZeroParser[T , N <: T : scala.reflect.ClassTag](parser: Parser[T])(i
       None
     }
   }
+}
+
+class LineParser[T](constructor: Array[Byte] => T) extends Parser[T] {
+  private val CR    = '\r'.toByte
+  private val LF    = '\n'.toByte
+  private val empty = Array[Byte]()
+  private var build: Array[Byte] = empty
+
+  var scanByte = CR
+
+  def complete() : T = {
+    val t = constructor(build)
+    build = empty
+    scanByte = CR
+    t
+  }
+
+  def parse(buffer: DataBuffer): Option[T] = {
+    var pos = buffer.data.position
+    val until = buffer.remaining + pos
+    var res: Option[T] = None
+    while (pos < until && res == None) {
+      val byte = buffer.data.get(pos)
+      if (byte == scanByte) {
+        if (scanByte == CR) {
+          //the -1 is so we don't copy-in the \r
+          val copy = new Array[Byte](pos - buffer.data.position)
+          buffer.data.get(copy)
+          if (build.length == 0) {
+            build = copy
+          } else {
+            build = build ++ copy
+          }
+          if (pos < until) {
+            //usually we can skip scanning for the \n
+            //do an extra get to read in the \n
+            buffer.data.position(buffer.data.position + 2)
+            res = Some(complete())
+          } else {
+            //this would only happen if the \n is in the next packet/buffer,
+            //very rare but it can happen, but we can't complete until we've read it in
+            buffer.data.position(buffer.data.position + 1)
+            scanByte = LF
+          }
+        } else {
+          res = Some(complete())
+        }
+      }
+      pos += 1
+    }
+    if (res == None) {
+      //copy the whole databuffer, we're not done yet
+      build = new Array(until - pos)
+      buffer.data.get(build)
+    }
+    res
+  }
+
+
 }
       
 
@@ -341,7 +402,8 @@ class RangeLineParser[T](delimiters: Array[Byte], constructor: (Array[Byte], Arr
 object NewParser {
 
   def firstLine = new RangeLineParser(Array(' '.toByte, ' '.toByte) , ParsedFL.apply)
-  def header: Parser[ParsedHeaderLine] = new RangeLineParser(Array(':'.toByte), FastParseHeader.apply)
+  //def header: Parser[ParsedHeaderLine] = new RangeLineParser(Array(':'.toByte), FastParseHeader.apply)
+  def header: Parser[ParsedHeaderLine] = new LineParser(FastParseHeader.make)
   def repeat = new RepeatZeroParser[ParsedHeaderLine, FastParseHeader](header)
 
   def parser = firstLine ~ repeat >> {case fl ~ headers => HeadResult(HttpRequestHead(fl, new HttpHeaders(headers.asInstanceOf[Array[HttpHeader]])), None, None)}
@@ -480,6 +542,8 @@ class HttpHeadParser extends Parser[HeadResult]{
   val flParser = new FastFLParser
 
   //val p = FastFLParser ~> skip(2) >> {fl => HeadResult(HttpRequestHead(fl, HttpHeaders()), None, None)}
+  val build = java.nio.ByteBuffer.allocate(500)
+
 
   def parse(d: DataBuffer): Option[HeadResult] = {
     var res: Option[HeadResult] = None
@@ -497,16 +561,21 @@ class HttpHeadParser extends Parser[HeadResult]{
       } else if (b == '\n') {
         headerState += 1
         if (headerState == 2) {
-          hparser.end()
+          //hparser.end()
+          //val array = new Array[Byte](build.position)
+          //build.flip
+          //build.get(array)
+          //build.clear()
         } else if (headerState == 4) {
           //two consecutive \r\n indicates the end of the request head
           headerState = 0
           res = Some(HeadResult(HttpRequestHead(fl.get, hparser.headers), None, None))
           fl = None
-          hparser.reset()
+          //hparser.reset()
         } 
       } else {
-        hparser.parse(b)
+        //hparser.parse(b)
+        //build.put(b.toByte)
         headerState = 0
       }
     }
