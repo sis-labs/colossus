@@ -26,22 +26,23 @@ object HttpRequestParser {
     } 
   }
 
-  protected def httpHead = firstLine ~ headers >> {case fl ~ headers => 
-    def fastFind(key: String): Option[HttpHeader] = {
-      var i = 0
-      var res: Option[HttpHeader] = None
-      while (i < headers.size && res == None) {
-        if (headers(i) matches key) {
-          res = Some(headers(i))
-        }
-        i += 1
+  protected def fastFind(headers: Array[EncodedHttpHeader], key: String): Option[HttpHeader] = {
+    var i = 0
+    var res: Option[HttpHeader] = None
+    while (i < headers.size && res == None) {
+      if (headers(i) matches key) {
+        res = Some(headers(i))
       }
-      res
+      i += 1
     }
+    res
+  }
+
+  protected def httpHead = firstLine ~ headers >> {case fl ~ headers => 
     HeadResult(
       HttpRequestHead(fl, new HttpHeaders(headers.asInstanceOf[Array[HttpHeader]])), 
-      fastFind("content-length").map{_.value.toInt}, 
-      fastFind("transfer-encoding").map{_.value}
+      fastFind(headers, "content-length").map{_.value.toInt}, 
+      fastFind(headers, "transfer-encoding").map{_.value}
     )
   }
 
@@ -86,9 +87,9 @@ case class ParsedFL(data: Array[Byte]) extends FirstLine with LazyParsing {
 
   private lazy val pathStart  = fastIndex(' '.toByte) + 1
   private lazy val pathLength = fastIndex(' '.toByte, pathStart) - pathStart
-  
+
   lazy val method     = parsed { HttpMethod(new String(data, 0, pathStart - 1)) } //the -1 is for the space between method and path
-  lazy val path       = new String(data, pathStart, pathLength, "US-ASCII")
+  lazy val path       = parsed { new String(data, pathStart, pathLength) }
   lazy val version    = parsed { 
     val vstart = pathStart + pathLength + 1
     HttpVersion(data, vstart, data.size - vstart - 2)
