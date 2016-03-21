@@ -47,9 +47,9 @@ object HttpRequestParser {
 
   implicit val z: Zero[ParsedHeaderLine, EncodedHttpHeader] = HttpHeader.FPHZero
 
-  def firstLine = line(true) >> ParsedFL
+  def firstLine = line(ParsedFL.apply, true)
   def headers = repeatZero[ParsedHeaderLine, EncodedHttpHeader](header)
-  def header: Parser[ParsedHeaderLine] = line(true) >> HttpHeader.apply
+  def header: Parser[ParsedHeaderLine] = line(HttpHeader.apply, true)
 
   
 }
@@ -88,9 +88,13 @@ case class ParsedFL(data: Array[Byte]) extends FirstLine with LazyParsing {
   private lazy val pathLength = fastIndex(' '.toByte, pathStart) - pathStart
   
   lazy val method     = parsed { HttpMethod(new String(data, 0, pathStart - 1)) } //the -1 is for the space between method and path
-  lazy val path       = parsed { new String(data, pathStart, pathLength) }
-  lazy val version    = parsed { HttpVersion(new String(data, pathStart + pathLength + 1, data.size - (pathStart + pathLength + 1) - 2)) }
+  lazy val path       = new String(data, pathStart, pathLength, "US-ASCII")
+  lazy val version    = parsed { 
+    val vstart = pathStart + pathLength + 1
+    HttpVersion(data, vstart, data.size - vstart - 2)
+  }
 }
+
 
 
 

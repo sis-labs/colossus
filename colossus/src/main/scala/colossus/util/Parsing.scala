@@ -734,7 +734,7 @@ object Combinators {
    */
   def repeatZero[T , N <: T : scala.reflect.ClassTag](parser: Parser[T])(implicit zero: Zero[T,N]) = new RepeatZeroParser(parser)
 
-  class LineParser(includeNewline: Boolean = false) extends Parser[Array[Byte]] {
+  class LineParser[T](constructor: Array[Byte] => T, includeNewline: Boolean = false) extends Parser[T] {
     private val CR    = '\r'.toByte
     private val LF    = '\n'.toByte
     private val empty = Array[Byte]()
@@ -742,17 +742,17 @@ object Combinators {
 
     var scanByte = CR
 
-    def complete() : Array[Byte] = {
+    def complete() : T = {
       val t = build
       build = empty
       scanByte = CR
-      t
+      constructor(t)
     }
 
-    def parse(buffer: DataBuffer): Option[Array[Byte]] = {
+    def parse(buffer: DataBuffer): Option[T] = {
       var pos = buffer.data.position
       val until = buffer.remaining + pos
-      var res: Option[Array[Byte]] = None
+      var res: Option[T] = None
       while (pos < until && res == None) {
         val byte = buffer.data.get(pos)
         if (byte == scanByte) {
@@ -808,7 +808,11 @@ object Combinators {
 
 
   }
-  def line(includeNewline: Boolean = false) = new LineParser(includeNewline)
+  def line: Parser[Array[Byte]] = line(false)
+
+  def line(includeNewline: Boolean): Parser[Array[Byte]] = new LineParser(x => x, includeNewline)
+
+  def line[T](constructor: Array[Byte] => T, includeNewLine: Boolean) : Parser[T] = new LineParser(constructor, includeNewLine)
 
 
   //this is just a tuple that allows for cleaner pattern matching

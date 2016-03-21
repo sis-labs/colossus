@@ -49,6 +49,11 @@ object HttpVersion {
   def apply(str: String): HttpVersion = {
     if (str == "HTTP/1.1") `1.1` else if (str=="HTTP/1.0") `1.0` else throw new ParseException(s"Invalid http version '$str'")
   }
+
+  def apply(bytes: Array[Byte], start: Int, length: Int): HttpVersion = {
+    val b = bytes(start + length - 1).toChar
+    if (b == '1') `1.1` else if (b == '0') `1.0` else throw new ParseException(s"Invalid http version")
+  }
 }
 
 
