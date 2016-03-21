@@ -2,8 +2,9 @@ package colossus
 package protocols.http
 
 import akka.util.ByteString
-import colossus.protocols.http.Connection.{Close, KeepAlive}
+import Connection.{Close, KeepAlive}
 import com.github.nscala_time.time.Imports._
+import core.{DataOutBuffer, Encoder}
 
 import scala.collection.immutable.HashMap
 import parsing.ParseException
@@ -51,42 +52,18 @@ object HttpVersion {
 }
 
 
-trait HttpHeader {
+
+trait HttpHeader extends Encoder {
+
   def key: String
   def value: String
-  def encoded: Array[Byte]
-
-  override def equals(that: Any): Boolean = that match {
-    case that: HttpHeader => this.key == that.key && this.value == that.value
-    case other => false
-  }
-
-  override def hashCode = (key + value).hashCode
-
-  override def toString = s"($key,$value)"
 
 }
-
-//generally created when encoding http responses
-class EncodedHeader(val encoded: Array[Byte], keyLength: Int, valueStart: Int) extends HttpHeader {
-  lazy val key = new String(encoded.take(keyLength))
-  lazy val value = new String(encoded.drop(valueStart).dropRight(HttpHeader.NEWLINE.length))
-}
-
-//generally created when parsing http requests
-class DecodedHeader(val key: String, val value: String) extends HttpHeader {
-  lazy val encoded = (key + HttpHeader.DELIM + value + HttpHeader.NEWLINE).getBytes("UTF-8")
-
-  def toEncodedHeader = new EncodedHeader(encoded, key.length, key.length + HttpHeader.DELIM.length)
-}
-
 
 object HttpHeader {
   val DELIM = ": "
   val NEWLINE = "\r\n"
 
-
-  def apply(key: String, value: String): HttpHeader = (new DecodedHeader(key, value)).toEncodedHeader
 
   object Conversions {
     implicit def liftTupleList(l: Seq[(String, String)]): HttpHeaders = new HttpHeaders (
@@ -94,6 +71,54 @@ object HttpHeader {
     )
   }
 
+  def apply(data: Array[Byte]): ParsedHeaderLine = if (data.size == 2) EndLine else new EncodedHttpHeader(data)
+
+  def apply(key: String, value: String) : HttpHeader = new EncodedHttpHeader((key + ": " + value + "\r\n").getBytes("UTF-8"))
+
+  implicit object FPHZero extends parsing.Zero[ParsedHeaderLine, EncodedHttpHeader] {
+    def isZero(t: ParsedHeaderLine) = t == EndLine
+    def nonZero(t: ParsedHeaderLine) = t match {
+      case EndLine => None
+      case h: EncodedHttpHeader => Some(h)
+    }
+  }
+
+}
+
+sealed trait ParsedHeaderLine
+case object EndLine extends ParsedHeaderLine
+class EncodedHttpHeader(data: Array[Byte]) extends HttpHeader with ParsedHeaderLine with LazyParsing {
+
+  //BE AWARE - data contains the \r\n
+
+  protected val parseErrorMessage = "Malformed header"
+
+  private lazy val valueStart = parsed { data.indexOf(':'.toByte) + 1 }
+  lazy val key        = parsed { new String(data, 0, valueStart - 1).toLowerCase }
+  lazy val value      = parsed { new String(data, valueStart, data.length - valueStart - 2).trim }
+
+  def encode(out: DataOutBuffer) {
+    out.write(data)
+  }
+
+  /**
+   * Faster version of checking if the header key matches the given key.  It
+   * will check the first character before attempting to build the full string
+   * of the header, amortizing the costs
+   */
+  def matches(matchkey: String) = {
+    val c = matchkey(0).toByte
+    if (data(0) == c || data(0) + 32 == c) matchkey == key else false
+  }
+
+  override def toString = key + ":" + value
+
+  override def equals(that: Any): Boolean = that match {
+    case that: HttpHeader => this.key == that.key && this.value == that.value
+    case other => false
+  }
+
+  override def hashCode = toString.hashCode
 }
     
 class HttpHeaders(private val headers: Array[HttpHeader]) {
@@ -127,7 +152,7 @@ class HttpHeaders(private val headers: Array[HttpHeader]) {
   def encode(buffer: core.DataOutBuffer) {
     var i = 0
     while (i < headers.size) {
-      buffer.write(headers(i).encoded)
+      headers(i).encode(buffer)
       i += 1
     }
 
@@ -291,14 +316,21 @@ class DateHeader(start: Long = System.currentTimeMillis) extends HttpHeader {
   def key = lastDate.key
   def value = lastDate.value
 
-  def encoded: Array[Byte] = encoded(System.currentTimeMillis)
-
-  def encoded(time: Long): Array[Byte] = {
+  private def check(time: Long) {
     if (time >= lastTime + 1000) {
       lastDate = generate(time)
       lastTime = time
     }
-    lastDate.encoded
+  }
+
+  def encode(out: DataOutBuffer) {
+    check(System.currentTimeMillis)
+    lastDate.encode(out)
+  }
+
+  def bytes(time: Long): ByteString = {
+    check(time)
+    bytes
   }
 
 }

@@ -734,7 +734,7 @@ object Combinators {
    */
   def repeatZero[T , N <: T : scala.reflect.ClassTag](parser: Parser[T])(implicit zero: Zero[T,N]) = new RepeatZeroParser(parser)
 
-  class LineParser extends Parser[Array[Byte]] {
+  class LineParser(includeNewline: Boolean = false) extends Parser[Array[Byte]] {
     private val CR    = '\r'.toByte
     private val LF    = '\n'.toByte
     private val empty = Array[Byte]()
@@ -758,14 +758,26 @@ object Combinators {
         if (byte == scanByte) {
           if (scanByte == CR) {
             //the -1 is so we don't copy-in the \r
-            val copy = new Array[Byte](pos - buffer.data.position)
-            buffer.data.get(copy)
+            val copy = if (includeNewline) {
+              val c = new Array[Byte](pos - buffer.data.position + 2)
+              buffer.data.get(c, 0, c.size - 2)
+              //doing this is easier than trying to handle the fact that the LF
+              //may not be in the buffer and trying to fiddle with pos based on
+              //this flag
+              c(c.size - 2) = CR
+              c(c.size - 1) = LF
+              c
+            } else {
+              val c = new Array[Byte](pos - buffer.data.position)
+              buffer.data.get(c)
+              c
+            }
             if (build.length == 0) {
               build = copy
             } else {
               build = build ++ copy
             }
-            if (pos < until) {
+            if (pos + 1 < until) {
               //usually we can skip scanning for the \n
               //do an extra get to read in the \n
               buffer.data.position(buffer.data.position + 2)
@@ -777,6 +789,8 @@ object Combinators {
               scanByte = LF
             }
           } else {
+            //reading in LF as the first byte
+            buffer.data.position(buffer.data.position + 1)
             res = Some(complete())
           }
         }
@@ -784,8 +798,9 @@ object Combinators {
       }
       if (res == None) {
         //copy the whole databuffer, we're not done yet
-        build = new Array(until - pos)
-        buffer.data.get(build)
+        val add = new Array[Byte](buffer.remaining)
+        buffer.data.get(add)
+        build = build ++ add
       }
       res
     }
@@ -793,7 +808,7 @@ object Combinators {
 
 
   }
-  def line = new LineParser
+  def line(includeNewline: Boolean = false) = new LineParser(includeNewline)
 
 
   //this is just a tuple that allows for cleaner pattern matching

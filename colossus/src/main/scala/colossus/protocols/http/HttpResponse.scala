@@ -86,7 +86,7 @@ case class HttpResponse(head: HttpResponseHead, body: HttpBody) extends BaseHttp
   def encode(buffer: DataOutBuffer) {
     head.encode(buffer)
     body.contentType.foreach{ctype =>
-      buffer.write(ctype.encoded)
+      ctype.encode(buffer)
     }
     buffer.write(HttpResponse.ContentLengthKeyArray)
     fastIntToString(body.size, buffer)

@@ -2,17 +2,38 @@ package colossus
 package protocols.http
 
 import akka.util.ByteString
+import core.{DataOutBuffer, Encoder}
 
-trait FirstLine {
+trait FirstLine extends Encoder {
   def method : HttpMethod
   def path : String
   def version : HttpVersion
+
+  override def toString = s"$method $path $version"
+
+  override def equals(that: Any): Boolean = that match {
+    case that : FirstLine => this.toString == that.toString
+    case _ => false
+  }
+
+  override def hashCode = toString.hashCode
+
 }
 
-case class BuildFL(method: HttpMethod, path: String, version: HttpVersion) extends FirstLine
+case class BuildFL(method: HttpMethod, path: String, version: HttpVersion) extends FirstLine {
+
+  def encode(buffer: DataOutBuffer) {
+    buffer write method.bytes
+    buffer write ' '
+    buffer write path.getBytes("UTF-8")
+    buffer write ' '
+    buffer write version.messageArr
+    buffer write HttpParse.NEWLINE_ARRAY
+  }
+}
 
 
-case class HttpRequestHead(firstLine: FirstLine, headers: HttpHeaders) {
+case class HttpRequestHead(firstLine: FirstLine, headers: HttpHeaders) extends Encoder {
 
   lazy val method = firstLine.method
   lazy val url = firstLine.path
@@ -45,12 +66,7 @@ case class HttpRequestHead(firstLine: FirstLine, headers: HttpHeaders) {
   lazy val cookies: Seq[Cookie] = headers.allValues(HttpHeaders.CookieHeader).flatMap{Cookie.parseHeader}
 
   def encode(buffer: core.DataOutBuffer) {
-    buffer write method.bytes
-    buffer write ' '
-    buffer write url.getBytes("UTF-8")
-    buffer write ' '
-    buffer write version.messageArr
-    buffer write HttpParse.NEWLINE_ARRAY
+    firstLine encode buffer
     headers encode buffer
     buffer write HttpParse.NEWLINE_ARRAY
   }
@@ -74,7 +90,7 @@ object HttpRequestHead {
   }
 }
 
-case class HttpRequest(head: HttpRequestHead, body: HttpBody) extends core.Encoder {
+case class HttpRequest(head: HttpRequestHead, body: HttpBody) extends Encoder {
   import head._
   import HttpCodes._
 
@@ -93,12 +109,6 @@ case class HttpRequest(head: HttpRequestHead, body: HttpBody) extends core.Encod
     head encode buffer
     //TODO : write content-length
     body encode buffer
-  }
-
-  def bytes: ByteString = {
-    val d = new core.DynamicOutBuffer(100, false)
-    encode(d)
-    ByteString(d.data.takeAll)
   }
 
   def withHeader(key: String, value: String) = copy(head = head.withHeader(key, value))
