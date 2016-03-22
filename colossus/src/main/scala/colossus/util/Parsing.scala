@@ -728,11 +728,33 @@ object Combinators {
     }
   }
 
+  class FoldZeroParser[T, N <: T, U](parser: Parser[T], init: U)(folder: (N, U) => U)(implicit zero: Zero[T,N]) extends Parser[U] {
+    
+    var current: U = init
+
+    def parse(data: DataBuffer): Option[U] = {
+      var res: Option[U] = None
+      while (data.hasUnreadData && res == None) {
+        parser.parse(data) match {
+          case Some(v) => zero.nonZero(v) match {
+            case Some(nonzero) => current = folder(nonzero, current)
+            case None => res = Some(current)
+          }
+          case None => {}
+        }
+      }
+      res
+    }
+  }
+
+
   /**
    * Repeat using a parser until it returns a zero value.  An array of non-zero
    * values is returned
    */
   def repeatZero[T , N <: T : scala.reflect.ClassTag](parser: Parser[T])(implicit zero: Zero[T,N]) = new RepeatZeroParser(parser)
+
+  def foldZero[T, N <: T, U](parser: Parser[T], init: U)(folder: (N, U) => U)(implicit zero: Zero[T,N]) = new FoldZeroParser(parser, init)(folder)
 
   class LineParser[T](constructor: Array[Byte] => T, includeNewline: Boolean = false) extends Parser[T] {
     private val CR    = '\r'.toByte

@@ -96,7 +96,7 @@ class EncodedHttpHeader(data: Array[Byte]) extends HttpHeader with ParsedHeaderL
 
   //BE AWARE - data contains the \r\n
 
-  protected val parseErrorMessage = "Malformed header"
+  protected def parseErrorMessage = "Malformed header"
 
   private lazy val valueStart = parsed { data.indexOf(':'.toByte) + 1 }
   lazy val key        = parsed { new String(data, 0, valueStart - 1).toLowerCase }

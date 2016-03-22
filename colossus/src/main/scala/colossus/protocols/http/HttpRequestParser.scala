@@ -38,11 +38,11 @@ object HttpRequestParser {
     res
   }
 
-  protected def httpHead = firstLine ~ headers >> {case fl ~ headers => 
+  protected def httpHead = firstLine ~ newHeaders >> {case fl ~ headersBuilder => 
     HeadResult(
-      HttpRequestHead(fl, new HttpHeaders(headers.asInstanceOf[Array[HttpHeader]])), 
-      fastFind(headers, "content-length").map{_.value.toInt}, 
-      fastFind(headers, "transfer-encoding").map{_.value}
+      HttpRequestHead(fl, headersBuilder.buildHeaders), 
+      headersBuilder.contentLength,
+      headersBuilder.transferEncoding
     )
   }
 
@@ -52,6 +52,45 @@ object HttpRequestParser {
   def headers = repeatZero[ParsedHeaderLine, EncodedHttpHeader](header)
   def header: Parser[ParsedHeaderLine] = line(HttpHeader.apply, true)
 
+
+  def newHeaders: Parser[HeadersBuilder] = foldZero(header, new HeadersBuilder){ (header: EncodedHttpHeader, builder) => builder.add(header) }
+
+
+  
+}
+
+class HeadersBuilder {
+
+  private var cl: Option[Int] = None
+  private var te: Option[String] = None
+
+  def contentLength = cl
+  def transferEncoding = te
+
+  private val build = new java.util.LinkedList[EncodedHttpHeader]()
+
+  def add(header: EncodedHttpHeader): HeadersBuilder = {
+    build.add(header)
+    if (cl.isEmpty && header.matches("content-length")) {
+      cl = Some(header.value.toInt)
+    }
+    if (te.isEmpty && header.matches("transfer-encoding")) {
+      te = Some(header.value)
+    }
+    
+    this
+  }
+
+
+  def buildHeaders: HttpHeaders = {
+    val h = new Array[HttpHeader](build.size)
+    var i = 0
+    while (build.size > 0) {
+      h(i) = build.remove()
+      i += 1
+    }
+    new HttpHeaders(h)
+  }
   
 }
 
@@ -73,7 +112,7 @@ trait LazyParsing {
 
 case class ParsedFL(data: Array[Byte]) extends FirstLine with LazyParsing {
 
-  protected val parseErrorMessage = "Malformed head"
+  protected def parseErrorMessage = "Malformed head"
 
   def fastIndex(byte: Byte, start: Int = 0) = {
     var pos = start
