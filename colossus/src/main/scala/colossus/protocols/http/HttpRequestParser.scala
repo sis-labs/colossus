@@ -53,7 +53,9 @@ object HttpRequestParser {
   def header: Parser[ParsedHeaderLine] = line(HttpHeader.apply, true)
 
 
-  def newHeaders: Parser[HeadersBuilder] = foldZero(header, new HeadersBuilder){ (header: EncodedHttpHeader, builder) => builder.add(header) }
+  def folder(header: EncodedHttpHeader, builder: HeadersBuilder): HeadersBuilder = builder.add(header)
+
+  def newHeaders: Parser[HeadersBuilder] = foldZero(header, new HeadersBuilder)(folder)
 
 
   
@@ -83,13 +85,7 @@ class HeadersBuilder {
 
 
   def buildHeaders: HttpHeaders = {
-    val h = new Array[HttpHeader](build.size)
-    var i = 0
-    while (build.size > 0) {
-      h(i) = build.remove()
-      i += 1
-    }
-    new HttpHeaders(h)
+    new HttpHeaders(build.asInstanceOf[java.util.List[HttpHeader]]) //silly invariant java collections :/
   }
   
 }

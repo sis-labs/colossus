@@ -5,6 +5,7 @@ import akka.util.ByteString
 import Connection.{Close, KeepAlive}
 import com.github.nscala_time.time.Imports._
 import core.{DataOutBuffer, Encoder}
+import java.util.{LinkedList, List => JList}
 
 import scala.collection.immutable.HashMap
 import parsing.ParseException
@@ -71,8 +72,8 @@ object HttpHeader {
 
 
   object Conversions {
-    implicit def liftTupleList(l: Seq[(String, String)]): HttpHeaders = new HttpHeaders (
-      l.map{ case (k,v) => HttpHeader(k,v) }.toArray
+    implicit def liftTupleList(l: Seq[(String, String)]): HttpHeaders = HttpHeaders.fromSeq (
+      l.map{ case (k,v) => HttpHeader(k,v) }
     )
   }
 
@@ -126,15 +127,15 @@ class EncodedHttpHeader(data: Array[Byte]) extends HttpHeader with ParsedHeaderL
   override def hashCode = toString.hashCode
 }
     
-class HttpHeaders(private val headers: Array[HttpHeader]) {
+class HttpHeaders(private val headers: JList[HttpHeader]) {
   def firstValue(name: String): Option[String] = {
     val l = name.toLowerCase
-    headers.collectFirst{ case x if (x.key == l) => x.value }
+    toSeq.collectFirst{ case x if (x.key == l) => x.value }
   }
 
   def allValues(name: String): Seq[String] = {
     val l = name.toLowerCase
-    headers.collect{ case x if (x.key == l) => x.value }
+    toSeq.collect{ case x if (x.key == l) => x.value }
   }
 
   /** Returns the value of the content-length header, if it exists.
@@ -148,17 +149,19 @@ class HttpHeaders(private val headers: Array[HttpHeader]) {
 
   def connection: Option[Connection] = firstValue(HttpHeaders.Connection).flatMap(Connection.unapply)
 
-  def + (kv: (String, String)) = new HttpHeaders(headers :+ HttpHeader(kv._1, kv._2))
+  def + (kv: (String, String)) = {
+    val n = HttpHeader(kv._1, kv._2)
+    HttpHeaders.fromSeq(toSeq :+ n)
+  }
 
   def size = headers.size
 
-  def toSeq : Seq[HttpHeader] = headers
+  def toSeq : Seq[HttpHeader] = headers.toArray(Array[HttpHeader]())
 
   def encode(buffer: core.DataOutBuffer) {
-    var i = 0
-    while (i < headers.size) {
-      headers(i).encode(buffer)
-      i += 1
+    val it = headers.iterator
+    while (it.hasNext) {
+      it.next.encode(buffer)
     }
 
   }
@@ -168,7 +171,7 @@ class HttpHeaders(private val headers: Array[HttpHeader]) {
     case other => false
   }
 
-  override def toString = "[" + headers.map{_.toString}.mkString(" ") + "]"
+  override def toString = "[" + toSeq.map{_.toString}.mkString(" ") + "]"
 
 }
 
@@ -191,9 +194,15 @@ object HttpHeaders {
   val SetCookie         = "set-cookie"
   val TransferEncoding  = "transfer-encoding"
 
-  def apply(hdrs: HttpHeader*) : HttpHeaders = new HttpHeaders(hdrs.toArray)
+  def apply(hdrs: HttpHeader*) : HttpHeaders = HttpHeaders.fromSeq(hdrs)
 
-  val Empty = new HttpHeaders(Array())
+  def fromSeq(seq: Seq[HttpHeader]): HttpHeaders = {
+    val l = new LinkedList[HttpHeader]
+    seq.foreach(l.add)
+    new HttpHeaders(l)
+  }
+
+  val Empty = new HttpHeaders(new LinkedList)
 }
 
 
