@@ -24,7 +24,30 @@ object HttpResponseHeader {
 
 }
 
-case class HttpResponseHead(version : HttpVersion, code : HttpCode, headers : HttpHeaders ) {
+trait ResponseFL {
+  def version : HttpVersion
+  def code : HttpCode
+
+  override def toString = version.toString + " " + code.toString
+
+  override def hashCode = toString.hashCode
+}
+
+class ParsedResponseFL(data: Array[Byte]) extends ResponseFL with LazyParsing {
+
+  lazy val codeStart = fastIndex(data, ' '.toByte)
+  lazy val codemsgStart = fastIndex(data, ' '.toByte, codeStart)
+
+  lazy val version: HttpVersion = parsed { HttpVersion(data, 0, codeStart - 1) }
+  lazy val code: HttpCode = parsed { HttpCode((new String(data, codeStart, codemsgStart - 1)).toInt) }
+}
+
+case class BasicResponseFL(version : HttpVersion, code: HttpCode) extends ResponseFL
+
+case class HttpResponseHead(fl: ResponseFL, headers : HttpHeaders ) {
+
+  def version = fl.version
+  def code = fl.code
 
 
   def encode(buffer: DataOutBuffer) {
@@ -38,6 +61,14 @@ case class HttpResponseHead(version : HttpVersion, code : HttpCode, headers : Ht
   def withHeader(key: String, value: String) = copy(headers = headers + (key -> value))
 
 }
+
+object HttpResponseHead{
+
+  def apply(version: HttpVersion, code: HttpCode, headers: HttpHeaders): HttpResponseHead = {
+    HttpResponseHead(BasicResponseFL(version, code), headers)
+  }
+}
+  
 
 sealed trait BaseHttpResponse { 
 

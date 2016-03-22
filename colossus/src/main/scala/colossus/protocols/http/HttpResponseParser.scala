@@ -33,8 +33,8 @@ object HttpResponseParser  {
   //TODO: Dechunk on static
 
   protected def staticBody(dechunk: Boolean): Parser[DecodedResult.Static[HttpResponse]] = head |> {parsedHead =>
-    parsedHead.headers.transferEncoding match {
-      case TransferEncoding.Identity => parsedHead.headers.contentLength match {
+    parsedHead.transferEncoding match {
+      case None | Some(TransferEncoding.Identity) => parsedHead.contentLength match {
         case Some(0)  => const(DecodedResult.Static(HttpResponse(parsedHead, HttpBody.NoBody)))
         case Some(n)  => bytes(n) >> {body => DecodedResult.Static(HttpResponse(parsedHead, body))}
         case None if (parsedHead.code.isInstanceOf[NoBodyCode]) => const(DecodedResult.Static(HttpResponse(parsedHead, HttpBody.NoBody)))
@@ -70,7 +70,7 @@ object HttpResponseParser  {
     HttpResponseHead(version, code, HttpHeaders.fromSeq(headers.map{case (k,v) => HttpHeader(k,v)}))
   }
 
-  protected def firstLine = version ~ code 
+  protected def firstLine = line(true) >> ParsedResponseFL.apply
 
   protected def version = stringUntil(' ') >> {v => HttpVersion(v)}
 
