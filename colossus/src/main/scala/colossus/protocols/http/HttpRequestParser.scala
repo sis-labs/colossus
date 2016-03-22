@@ -46,11 +46,11 @@ object HttpRequestParser {
     )
   }
 
-  implicit val z: Zero[ParsedHeaderLine, EncodedHttpHeader] = HttpHeader.FPHZero
+  implicit val z: Zero[EncodedHttpHeader] = HttpHeader.FPHZero
 
   def firstLine = line(ParsedFL.apply, true)
-  def headers = repeatZero[ParsedHeaderLine, EncodedHttpHeader](header)
-  def header: Parser[ParsedHeaderLine] = line(HttpHeader.apply, true)
+  def headers = repeatZero[EncodedHttpHeader](header)
+  def header: Parser[EncodedHttpHeader] = line(HttpHeader.apply, true)
 
 
   def folder(header: EncodedHttpHeader, builder: HeadersBuilder): HeadersBuilder = builder.add(header)

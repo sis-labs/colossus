@@ -62,9 +62,8 @@ class ParserSizeTracker(maxSize: Option[DataSize]) {
 }
 
 
-trait Zero[T, N <: T] {
+trait Zero[T] {
   def isZero(t: T): Boolean
-  def nonZero(t: T): Option[N]
 }
 
 class UnsizedParseBuffer(terminus: ByteString, includeTerminusInData: Boolean = false, skip: Int = 0) {
@@ -700,27 +699,30 @@ object Combinators {
 
 
 
-  class RepeatZeroParser[T , N <: T : scala.reflect.ClassTag](parser: Parser[T])(implicit zero: Zero[T,N]) extends Parser[Array[N]] {
-    val build = new java.util.LinkedList[N]()
+  class RepeatZeroParser[T : scala.reflect.ClassTag](parser: Parser[T])(implicit zero: Zero[T]) extends Parser[Array[T]] {
+    val build = new java.util.LinkedList[T]()
 
-    def parse(data: DataBuffer): Option[Array[N]] = {
+    def parse(data: DataBuffer): Option[Array[T]] = {
       var done = false
       while (data.hasUnreadData && !done) {
         parser.parse(data) match {
-          case Some(res) => zero.nonZero(res) match {
-            case Some(header) => { build.add(header) }
-            case None => {done = true }
+          case Some(res) => if (!zero.isZero(res)) {
+            build.add(res)
+          } else {
+            done = true
           }
           case None => {}
         }
       }
       if (done) {
-        val h = new Array[N](build.size)
+        val h = new Array[T](build.size)
+        val it = build.iterator
         var i = 0
-        while (build.size > 0) {
-          h(i) = build.remove()
+        while (it.hasNext) {
+          h(i) = it.next
           i += 1
         }
+        build.clear()
         Some(h)
       } else {
         None
@@ -728,7 +730,7 @@ object Combinators {
     }
   }
 
-  class FoldZeroParser[T, N <: T, U](parser: Parser[T], init: => U)(folder: (N, U) => U)(implicit zero: Zero[T,N]) extends Parser[U] {
+  class FoldZeroParser[T, U](parser: Parser[T], init: => U)(folder: (T, U) => U)(implicit zero: Zero[T]) extends Parser[U] {
     
     var current: U = init
 
@@ -736,12 +738,11 @@ object Combinators {
       var res: Option[U] = None
       while (data.hasUnreadData && res == None) {
         parser.parse(data) match {
-          case Some(v) => zero.nonZero(v) match {
-            case Some(nonzero) => current = folder(nonzero, current)
-            case None => {
-              res = Some(current)
-              current = init
-            }
+          case Some(v) => if (!zero.isZero(v)) {
+            current = folder(v, current)
+          } else {
+            res = Some(current)
+            current = init
           }
           case None => {}
         }
@@ -755,9 +756,9 @@ object Combinators {
    * Repeat using a parser until it returns a zero value.  An array of non-zero
    * values is returned
    */
-  def repeatZero[T , N <: T : scala.reflect.ClassTag](parser: Parser[T])(implicit zero: Zero[T,N]) = new RepeatZeroParser(parser)
+  def repeatZero[T : scala.reflect.ClassTag](parser: Parser[T])(implicit zero: Zero[T]) = new RepeatZeroParser(parser)
 
-  def foldZero[T, N <: T, U](parser: Parser[T], init: => U)(folder: (N, U) => U)(implicit zero: Zero[T,N]) = new FoldZeroParser(parser, init)(folder)
+  def foldZero[T, U](parser: Parser[T], init: => U)(folder: (T, U) => U)(implicit zero: Zero[T]) = new FoldZeroParser(parser, init)(folder)
 
   class LineParser[T](constructor: Array[Byte] => T, includeNewline: Boolean = false) extends Parser[T] {
     private val CR    = '\r'.toByte

@@ -77,23 +77,17 @@ object HttpHeader {
     )
   }
 
-  def apply(data: Array[Byte]): ParsedHeaderLine = if (data.size == 2) EndLine else new EncodedHttpHeader(data)
+  def apply(data: Array[Byte]): EncodedHttpHeader = new EncodedHttpHeader(data)
 
   def apply(key: String, value: String) : HttpHeader = new EncodedHttpHeader((key + ": " + value + "\r\n").getBytes("UTF-8"))
 
-  implicit object FPHZero extends parsing.Zero[ParsedHeaderLine, EncodedHttpHeader] {
-    def isZero(t: ParsedHeaderLine) = t == EndLine
-    def nonZero(t: ParsedHeaderLine) = t match {
-      case EndLine => None
-      case h: EncodedHttpHeader => Some(h)
-    }
+  implicit object FPHZero extends parsing.Zero[EncodedHttpHeader] {
+    def isZero(t: EncodedHttpHeader) = t.data.size == 2 //just the /r/n 
   }
 
 }
 
-sealed trait ParsedHeaderLine
-case object EndLine extends ParsedHeaderLine
-class EncodedHttpHeader(data: Array[Byte]) extends HttpHeader with ParsedHeaderLine with LazyParsing {
+class EncodedHttpHeader(val data: Array[Byte]) extends HttpHeader with LazyParsing {
 
   //BE AWARE - data contains the \r\n
 
