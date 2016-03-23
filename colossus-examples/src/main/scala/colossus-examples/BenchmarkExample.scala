@@ -41,26 +41,9 @@ object BenchmarkService {
 
       def onConnect = ctx => new Service[Http](serviceConfig, ctx){ 
         def handle = { 
-          //case req => req.ok(plaintext, headers)
           case req if (req.head.url == "/plaintext")  => req.ok(plaintext, headers)
           case req if (req.head.url == "/json")       => req.ok(json, headers)
           case req if (req.head.url == "/echo")       => req.ok(req.toString, headers)
-
-          case req if (req.head.url == "/test") => {
-            println(Thread.currentThread.getName)
-            val request = "GET /plaintext HTTP/1.1\r\nfoo: bar\r\nbar: hello how are you today\r\nbaz:biz\r\n\r\n"
-            val buf = core.DataBuffer(akka.util.ByteString(request))
-            val parser = HttpRequestParser()
-            var i = 0
-            while (i < 10000000) {
-              i += 1
-              val res = parser.parse(buf)
-              val x = res.get.head.url
-
-              buf.data.rewind()
-            }
-            req.ok("done")
-          }
         }
       }
 

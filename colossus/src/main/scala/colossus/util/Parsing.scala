@@ -795,11 +795,8 @@ object Combinators {
     var scanByte = CR
 
     def complete() : T = {
-      constructor(build.complete)
-    }
-
-    def reset() {
       scanByte = CR
+      constructor(build.complete)
     }
 
     def parse(buffer: DataBuffer): Option[T] = {
@@ -818,7 +815,6 @@ object Combinators {
               //do an extra get to read in the \n
               buffer.data.position(buffer.data.position + 1)
               res = Some(complete())
-              reset()
             } else {
               //this would only happen if the \n is in the next packet/buffer,
               //very rare but it can happen, but we can't complete until we've read it in
@@ -827,7 +823,6 @@ object Combinators {
           } else {
             //this happens when the LF is the first byte of the data buffer
             res = Some(complete())
-            reset()
           }
         } else {
           build.write(byte)
