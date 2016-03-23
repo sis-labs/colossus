@@ -825,8 +825,7 @@ object Combinators {
               scanByte = LF
             }
           } else {
-            //reading in LF as the first byte
-            buffer.data.position(buffer.data.position + 1)
+            //this happens when the LF is the first byte of the data buffer
             res = Some(complete())
             reset()
           }
