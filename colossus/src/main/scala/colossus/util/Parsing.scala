@@ -760,73 +760,79 @@ object Combinators {
 
   def foldZero[T, U](parser: Parser[T], init: => U)(folder: (T, U) => U)(implicit zero: Zero[T]) = new FoldZeroParser(parser, init)(folder)
 
+  class FastArrayBuilder(initSize: Int, shrinkOnComplete: Boolean = false) {
+    private var build: Array[Byte] = new Array[Byte](initSize)
+
+    private var writePos = 0
+
+    def write(b: Byte) {
+      if (writePos == build.size) {
+        val nb = new Array[Byte](build.size * 2)
+        System.arraycopy(build, 0, nb, 0, build.size)
+        build = nb
+      }
+      build(writePos) = b
+      writePos += 1
+    }
+
+    def complete(): Array[Byte] = {
+      val res = new Array[Byte](writePos)
+      System.arraycopy(build, 0, res, 0, writePos)
+      writePos = 0
+      if (shrinkOnComplete && build.size > initSize) {
+        build = new Array(initSize)
+      }
+      res
+    }
+  }
+
   class LineParser[T](constructor: Array[Byte] => T, includeNewline: Boolean = false) extends Parser[T] {
     private val CR    = '\r'.toByte
     private val LF    = '\n'.toByte
     private val empty = Array[Byte]()
-    private var build: Array[Byte] = empty
+    private val build = new FastArrayBuilder(100)
 
     var scanByte = CR
 
     def complete() : T = {
-      val t = build
-      build = empty
+      constructor(build.complete)
+    }
+
+    def reset() {
       scanByte = CR
-      constructor(t)
     }
 
     def parse(buffer: DataBuffer): Option[T] = {
-      var pos = buffer.data.position
-      val until = buffer.remaining + pos
       var res: Option[T] = None
-      while (pos < until && res == None) {
-        val byte = buffer.data.get(pos)
+      while (buffer.hasUnreadData && res == None) {
+        val byte = buffer.data.get
         if (byte == scanByte) {
           if (scanByte == CR) {
             //the -1 is so we don't copy-in the \r
-            val copy = if (includeNewline) {
-              val c = new Array[Byte](pos - buffer.data.position + 2)
-              buffer.data.get(c, 0, c.size - 2)
-              //doing this is easier than trying to handle the fact that the LF
-              //may not be in the buffer and trying to fiddle with pos based on
-              //this flag
-              c(c.size - 2) = CR
-              c(c.size - 1) = LF
-              c
-            } else {
-              val c = new Array[Byte](pos - buffer.data.position)
-              buffer.data.get(c)
-              c
-            }
-            if (build.length == 0) {
-              build = copy
-            } else {
-              build = build ++ copy
-            }
-            if (pos + 1 < until) {
+            if (includeNewline) {
+              build.write(byte)
+              build.write(LF)
+            } 
+            if (buffer.hasUnreadData) {
               //usually we can skip scanning for the \n
               //do an extra get to read in the \n
-              buffer.data.position(buffer.data.position + 2)
+              buffer.data.position(buffer.data.position + 1)
               res = Some(complete())
+              reset()
             } else {
               //this would only happen if the \n is in the next packet/buffer,
               //very rare but it can happen, but we can't complete until we've read it in
-              buffer.data.position(buffer.data.position + 1)
               scanByte = LF
             }
           } else {
             //reading in LF as the first byte
             buffer.data.position(buffer.data.position + 1)
             res = Some(complete())
+            reset()
           }
+        } else {
+          build.write(byte)
         }
-        pos += 1
-      }
-      if (res == None) {
-        //copy the whole databuffer, we're not done yet
-        val add = new Array[Byte](buffer.remaining)
-        buffer.data.get(add)
-        build = build ++ add
       }
       res
     }
