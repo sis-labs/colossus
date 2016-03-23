@@ -13,6 +13,7 @@ import parsing.ParseException
 
 sealed abstract class HttpMethod(val name: String) {
   val bytes: Array[Byte] = name.getBytes("UTF-8")
+  val encodedSize = bytes.length
 }
 
 object HttpMethod {
@@ -27,6 +28,30 @@ object HttpMethod {
   case object Patch   extends HttpMethod("PATCH")
 
   val methods: List[HttpMethod] = List(Get, Post, Put, Delete, Head, Options, Trace, Connect, Patch)
+
+  def apply(line: Array[Byte]): HttpMethod = {
+    val guess = line(0) match {
+      case 'G' => Get
+      case 'P' => line(1) match {
+        case 'A' => Patch
+        case 'O' => Post
+        case 'U' => Put
+      }
+      case 'D' => Delete
+      case 'H' => Head
+      case 'O' => Options
+      case 'T' => Trace
+      case 'C' => Connect
+      case other => HttpMethod(new String(line, 0, line.indexOf(' '.toByte)))
+    }
+    //make a best effort to ensure we're actually getting the method we think we are
+    if (line(guess.encodedSize) != ' ') {
+      throw new ParseException(s"Invalid http method")
+    } else {
+      guess
+    }
+  }
+
 
   def apply(str: String): HttpMethod = {
     val ucase = str.toUpperCase

@@ -766,9 +766,9 @@ object Combinators {
     private var writePos = 0
 
     def write(b: Byte) {
-      if (writePos == build.size) {
-        val nb = new Array[Byte](build.size * 2)
-        System.arraycopy(build, 0, nb, 0, build.size)
+      if (writePos == build.length) {
+        val nb = new Array[Byte](build.length * 2)
+        System.arraycopy(build, 0, nb, 0, build.length)
         build = nb
       }
       build(writePos) = b
@@ -779,7 +779,7 @@ object Combinators {
       val res = new Array[Byte](writePos)
       System.arraycopy(build, 0, res, 0, writePos)
       writePos = 0
-      if (shrinkOnComplete && build.size > initSize) {
+      if (shrinkOnComplete && build.length > initSize) {
         build = new Array(initSize)
       }
       res

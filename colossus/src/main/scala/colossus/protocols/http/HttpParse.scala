@@ -73,8 +73,8 @@ trait LazyParsing {
 
   def fastIndex(data: Array[Byte], byte: Byte, start: Int = 0) = {
     var pos = start
-    while (pos < data.size && data(pos) != byte) { pos += 1 }
-    if (pos >= data.size) -1 else pos
+    while (pos < data.length && data(pos) != byte) { pos += 1 }
+    if (pos >= data.length) -1 else pos
   }
 
 }
