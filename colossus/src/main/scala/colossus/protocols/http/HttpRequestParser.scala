@@ -48,7 +48,7 @@ case class ParsedFL(data: Array[Byte]) extends FirstLine with LazyParsing {
   def encode(out: DataOutBuffer) {
     out.write(data)
   }
-  val method     = HttpMethod(data)
+  val method     = parsed {HttpMethod(data)}
 
   //private lazy val pathStart  = fastIndex(data, ' '.toByte, 3) + 1
   private def pathStart = method.encodedSize + 1
