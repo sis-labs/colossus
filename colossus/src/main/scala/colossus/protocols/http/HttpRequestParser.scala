@@ -49,8 +49,8 @@ case class ParsedFL(data: Array[Byte]) extends FirstLine with LazyParsing {
     out.write(data)
   }
 
-  private lazy val pathStart  = fastIndex(data, ' '.toByte) + 1
-  private lazy val pathLength = fastIndex(data, ' '.toByte, pathStart) - pathStart
+  private lazy val pathStart  = fastIndex(data, ' '.toByte, 3) + 1
+  private lazy val pathLength = data.size - 11 - pathStart //assumes the line ends with " HTTP/x/x\r\n", which it always should
 
   lazy val method     = parsed { HttpMethod(new String(data, 0, pathStart - 1)) } //the -1 is for the space between method and path
   lazy val path       = parsed { new String(data, pathStart, pathLength) }

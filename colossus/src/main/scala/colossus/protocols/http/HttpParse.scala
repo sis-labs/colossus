@@ -28,24 +28,6 @@ object HttpParse {
   case class HeadResult[T](head: T, contentLength: Option[Int], transferEncoding: Option[String] )
 
 
-  trait LazyParsing {
-
-    protected def parseErrorMessage: String
-
-    def parsed[T](op: => T): T = try {
-      op
-    } catch {
-      case p: ParseException => throw p
-      case other : Throwable => throw new ParseException(parseErrorMessage + s": $other")
-    }
-
-    def fastIndex(data: Array[Byte], byte: Byte, start: Int = 0) = {
-      var pos = start
-      while (pos < data.size && data(pos) != byte) { pos += 1 }
-      if (pos >= data.size) -1 else pos
-    }
-
-  }
 
   class HeadersBuilder {
 
@@ -75,5 +57,25 @@ object HttpParse {
     }
     
   }
+}
+
+
+trait LazyParsing {
+
+  protected def parseErrorMessage: String
+
+  def parsed[T](op: => T): T = try {
+    op
+  } catch {
+    case p: ParseException => throw p
+    case other : Throwable => throw new ParseException(parseErrorMessage + s": $other")
+  }
+
+  def fastIndex(data: Array[Byte], byte: Byte, start: Int = 0) = {
+    var pos = start
+    while (pos < data.size && data(pos) != byte) { pos += 1 }
+    if (pos >= data.size) -1 else pos
+  }
+
 }
 

@@ -30,16 +30,23 @@ trait ResponseFL {
 
   override def toString = version.toString + " " + code.toString
 
+  override def equals(that: Any): Boolean = that match {
+    case t : ResponseFL => this.toString == that.toString
+    case _ => false
+  }
+
   override def hashCode = toString.hashCode
 }
 
-class ParsedResponseFL(data: Array[Byte]) extends ResponseFL with LazyParsing {
+case class ParsedResponseFL(data: Array[Byte]) extends ResponseFL with LazyParsing {
 
-  lazy val codeStart = fastIndex(data, ' '.toByte)
-  lazy val codemsgStart = fastIndex(data, ' '.toByte, codeStart)
+  protected def parseErrorMessage = "malformed head"
+
+  lazy val codeStart = fastIndex(data, ' '.toByte) + 1
+  lazy val codemsgStart = fastIndex(data, ' '.toByte, codeStart) + 1
 
   lazy val version: HttpVersion = parsed { HttpVersion(data, 0, codeStart - 1) }
-  lazy val code: HttpCode = parsed { HttpCode((new String(data, codeStart, codemsgStart - 1)).toInt) }
+  lazy val code: HttpCode = parsed { HttpCode((new String(data, codeStart, codemsgStart - codeStart - 1)).toInt) }
 }
 
 case class BasicResponseFL(version : HttpVersion, code: HttpCode) extends ResponseFL

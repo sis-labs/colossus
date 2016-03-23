@@ -92,13 +92,15 @@ class HttpRequestHeadSuite extends WordSpec with MustMatchers{
     def date(time: Long) = "Date: " + formatter.format(new Date(time)) + "\r\n"
     
     "generate a correct date" in {
-      (new DateHeader(123)).bytes(time = 1234567).utf8String must equal(date(1234567))
+      val time = System.currentTimeMillis + 1000000
+      (new DateHeader(123)).bytes(time).utf8String must equal(date(time))
     }
     "only generate a new date when more than a second past the last generated date" in {
+      val time = System.currentTimeMillis + 1000000
       val d = new DateHeader(123)
-      d.bytes(time = 1234567).utf8String must equal(date(1234567))
-      d.bytes(time = 1235566).utf8String must equal(date(1234567))
-      d.bytes(time = 1235567).utf8String must equal(date(1235567))
+      d.bytes(time).utf8String must equal(date(time))
+      d.bytes(time + 999).utf8String must equal(date(time))
+      d.bytes(time + 1000).utf8String must equal(date(time + 1000))
     }
   }
 
