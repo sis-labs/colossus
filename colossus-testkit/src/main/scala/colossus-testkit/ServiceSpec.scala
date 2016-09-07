@@ -1,6 +1,8 @@
 package colossus
 package testkit
 
+import colossus.metrics.MetricSystem
+
 import scala.concurrent.Await
 import scala.concurrent.duration._
 import java.net.InetSocketAddress
@@ -9,12 +11,12 @@ import core.ServerRef
 import service._
 import scala.reflect.ClassTag
 
-abstract class ServiceSpec[C <: Protocol](implicit provider: CodecProvider[C], clientProvider: ClientCodecProvider[C]) extends ColossusSpec {
+abstract class ServiceSpec[C <: Protocol](implicit provider: ServiceCodecProvider[C], clientProvider: ClientCodecProvider[C]) extends ColossusSpec {
   
   type Request = C#Input
   type Response = C#Output
 
-  implicit val sys = IOSystem("test-system", 2)
+  implicit val sys = IOSystem("test-system", Some(2), MetricSystem.deadSystem)
 
   
   def service: ServerRef
@@ -33,9 +35,9 @@ abstract class ServiceSpec[C <: Protocol](implicit provider: CodecProvider[C], c
     requestTimeout = timeout
   )
 
-  def client(timeout: FiniteDuration = requestTimeout) = AsyncServiceClient[C](clientConfig(timeout))//, clientProvider.clientCodec)
+  def client(timeout: FiniteDuration = requestTimeout) = FutureClient[C](clientConfig(timeout))
 
-  def withClient(f: AsyncServiceClient[Request, Response] => Unit) {
+  def withClient(f: FutureClient[C] => Unit) {
     val c = client()
     f(c)
     c.disconnect()
@@ -59,8 +61,4 @@ abstract class ServiceSpec[C <: Protocol](implicit provider: CodecProvider[C], c
       }
     }
   }
-      
-
 }
-
-

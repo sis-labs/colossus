@@ -1,7 +1,5 @@
 package colossus.metrics
 
-import scala.util.Try
-
 trait MetricFormatter[T] {
   def format(m: MetricFragment, timestamp: Long): T
 }
@@ -15,7 +13,7 @@ object OpenTsdbFormatter extends MetricFormatter[String] {
 
 
 case class MetricAddress(components: List[String]) {
-  def /(c: String): MetricAddress = copy(components = components :+ c)//.toLowercase removed for backwards compatability
+  def /(c: String): MetricAddress = /(MetricAddress(c))
 
   def /(m: MetricAddress): MetricAddress = copy(components = components ++ m.components)
 
@@ -24,6 +22,11 @@ case class MetricAddress(components: List[String]) {
   def pieceString = components.mkString("/")
 
   def idString = components.mkString("_")
+  
+  /**
+   * String version the address used for loading configuration
+   */
+  def configString = components.mkString(".")
 
   def tail = copy(components.tail)
   def head = components.head
@@ -61,19 +64,20 @@ case class MetricAddress(components: List[String]) {
 object MetricAddress {
   val Root = MetricAddress(Nil)
 
-  def fromString(str: String): Try[MetricAddress] = Try {
-    if (str == "/") MetricAddress.Root else {
-      val pieces = str.split("/")
-      if (pieces(0) != "") {
-        throw new IllegalArgumentException("Address must start with leading /")
+  def fromString(str: String): MetricAddress = {
+    str match {
+      case "" | "/" => MetricAddress.Root
+      case _ => {
+        val s = if (str startsWith "/") str else "/" + str
+        val pieces = s.split("/")
+        MetricAddress(pieces.toList.tail)
       }
-      MetricAddress(pieces.toList.tail)
     }
   }
 
-  def apply(str: String) = fromString(str).get
+  def apply(str: String) = fromString(str)
 
-  implicit def string2Address(s: String) : MetricAddress = fromString(if (s startsWith "/") s else "/" + s).get
+  implicit def string2Address(s: String) : MetricAddress = fromString(s)
 
 }
 

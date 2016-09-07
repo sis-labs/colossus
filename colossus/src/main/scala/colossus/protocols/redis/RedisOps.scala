@@ -1,12 +1,9 @@
 package colossus
 package protocols.redis
 
-import akka.util.{ByteString, ByteStringBuilder}
-import colossus.core.{Context, WorkerRef}
-import colossus.parsing.DataSize
+import akka.util.ByteString
 import colossus.service._
 
-import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.language.higherKinds
 
@@ -502,7 +499,7 @@ object RedisClient {
 
   implicit object RedisClientLifter extends ClientLifter[Redis, RedisClient] {
     
-    def lift[M[_]](client: Sender[Redis,M])(implicit async: Async[M]) = new LiftedClient(client) with RedisClient[M]
+    def lift[M[_]](client: Sender[Redis,M])(implicit async: Async[M]) = new BasicLiftedClient(client) with RedisClient[M]
   }
 
 }

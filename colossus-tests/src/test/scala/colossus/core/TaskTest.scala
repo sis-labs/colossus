@@ -3,17 +3,12 @@ package task
 
 import testkit._
 
-import core._
-
 import akka.actor._
 import akka.testkit.TestProbe
 
 import scala.concurrent.duration._
 
-import org.scalatest.Tag
-
 class TaskTest extends ColossusSpec {
-  import IOCommand.BindWorkerItem
 
   /* 
    * Notice in these tests we have to explicitly provide the sender when
@@ -78,7 +73,7 @@ class TaskTest extends ColossusSpec {
       }
     }
 
-    "unbind by killing self actor" ignore {
+    "unbind by killing self actor" in {
       withIOSystem{ implicit io =>
         val probe = TestProbe()
         val task = Task.start(new Task(_) {

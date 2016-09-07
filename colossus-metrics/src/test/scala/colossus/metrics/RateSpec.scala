@@ -2,13 +2,9 @@ package colossus.metrics
 
 import scala.concurrent.duration._
 
-
-import akka.testkit.TestProbe
-
 class RateSpec extends MetricIntegrationSpec {
 
-  implicit val c = new Collection(CollectorConfig(List(1.second, 1.minute)))
-  def rate() = new Rate("/foo", false)
+  def rate() = new DefaultRate("/foo", false, List(1.second, 1.minute))
 
   "Rate" must {
     "increment in all intervals" in {
@@ -18,6 +14,14 @@ class RateSpec extends MetricIntegrationSpec {
       r.tick(1.second)("/foo")(Map()) must equal(2)
       r.tick(1.minute)("/foo")(Map()) must equal(2)
     }
+
+    "increment by amount" in {
+      val r = rate()
+      r.hit(amount = 23)
+      r.value(1.second) mustBe 23
+      r.tick(1.second)("/foo")(Map()) must equal(23)
+    }
+
 
     "tick resets value for interval" in {
       val r = rate()
@@ -32,6 +36,24 @@ class RateSpec extends MetricIntegrationSpec {
     }
 
     "count" in {
+      val r = rate()
+      r.hit()
+      r.hit()
+      r.count() mustBe 2
+      r.tick(1.second)
+      r.count() mustBe 2
+    }
+
+    "get the current value for an interval" in {
+      val r = rate()
+      r.hit()
+      r.hit()
+      r.value(1.second) mustBe 2
+      r.tick(1.second)
+      r.value(1.second) mustBe 0
+    }
+
+    "count in metrics" in {
       val r = rate()
       r.hit()
       r.hit()
@@ -54,7 +76,7 @@ class RateSpec extends MetricIntegrationSpec {
     }
 
     "prune empty values" in {
-      val r = new Rate("/foo", true)
+      val r = new DefaultRate("/foo", true, List(1.second, 1.minute))
       r.hit(Map("a" -> "b"))
       r.hit(Map("b" -> "c"))
       r.hit(Map("b" -> "c"))
@@ -69,11 +91,12 @@ class RateSpec extends MetricIntegrationSpec {
       s2("foo")(Map("a" -> "b")) must equal(1)
     }
 
-
-
-
+    "have the right address" in {
+      implicit val ns = MetricContext("/foo", Collection.withReferenceConf(Seq(1.second))) / "bar"
+      val r = Rate("/baz")
+      r.address must equal(MetricAddress("/foo/bar/baz"))
+      
+    }
   }
-
-
 }
 

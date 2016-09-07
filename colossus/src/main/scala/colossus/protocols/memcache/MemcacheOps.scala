@@ -2,15 +2,12 @@ package colossus
 package protocols.memcache
 
 import akka.util.ByteString
-import colossus.core.Context
-import colossus.parsing.DataSize
 import colossus.protocols.memcache.MemcacheCommand._
 import colossus.protocols.memcache.MemcacheReply._
 import service._
 
 import scala.language.higherKinds
 
-import scala.concurrent.{ExecutionContext, Future}
 
   /**
    * This trait houses the Memcache API.  It contains implementations for most(not all commands.
@@ -121,7 +118,7 @@ import scala.concurrent.{ExecutionContext, Future}
   
     implicit object MemcacheClientLifter extends ClientLifter[Memcache, MemcacheClient] {
       
-      def lift[M[_]](client: Sender[Memcache,M])(implicit async: Async[M]) = new LiftedClient(client) with MemcacheClient[M]
+      def lift[M[_]](client: Sender[Memcache,M])(implicit async: Async[M]) = new BasicLiftedClient(client) with MemcacheClient[M]
     }
 
   }

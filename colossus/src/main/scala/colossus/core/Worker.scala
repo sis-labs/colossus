@@ -30,8 +30,8 @@ case class WorkerConfig(
 /**
  * This is a Worker's public interface.  This is what can be used to communicate with a Worker, as it
  * wraps the Worker's ActorRef, as well as providing some additional information which can be made public.
+ *
  * @param id The Worker's id.
- * @param metrics The Metrics associated with this Worker
  * @param worker The ActorRef of the Worker
  * @param system The IOSystem to which this Worker belongs
  */
@@ -71,7 +71,6 @@ case class WorkerRef private[colossus](id: Int, worker: ActorRef, system: IOSyst
    */
   implicit val callbackExecutor = service.CallbackExecutor(system.actorSystem.dispatcher, worker)
 
-  implicit val metrics = system.metrics.base
 }
 
 /**
@@ -106,9 +105,6 @@ class WorkerItemManager(worker: WorkerRef, log: LoggingAdapter) {
       val item = workerItems(id)
       workerItems -= id
       item.setUnbind()
-      if (item.context.proxyExists) {
-        item.context.proxy ! PoisonPill
-      }
     } else {
       log.error(s"Attempted to unbind worker $id that is not bound to this worker")
     }
@@ -138,8 +134,14 @@ class WorkerItemManager(worker: WorkerRef, log: LoggingAdapter) {
   def unbind(workerItem: WorkerItem) {
     unbind(workerItem.id)
   }
-}
 
+  def idleCheck(period: FiniteDuration) {
+    workerItems.foreach{
+      case (id, i: IdleCheck) => i.idleCheck(period)
+      case _ => {}
+    }
+  }
+}
 
 
 private[colossus] class Worker(config: WorkerConfig) extends Actor with ActorLogging with CallbackExecution {
@@ -157,11 +159,10 @@ private[colossus] class Worker(config: WorkerConfig) extends Actor with ActorLog
 
   private val workerIdTag = Map("worker" -> (io.name + "-" + workerId.toString))
 
-  import config.io.metrics.base
-
-  val eventLoops              = Rate(io.namespace / "worker" / "event_loops")
-  val numConnections          = Counter(io.namespace / "worker" / "connections")
-  val rejectedConnections     = Rate(io.namespace / "worker" / "rejected_connections")
+  implicit val ns = io.namespace / io.name
+  val eventLoops              = Rate("worker/event_loops", "worker-event-loops")
+  val numConnections          = Counter("worker/connections", "worker-connections")
+  val rejectedConnections     = Rate("worker/rejected_connections", "worker-rejected-connections")
 
   val selector: Selector = Selector.open()
   val buffer = ByteBuffer.allocateDirect(1024 * 128)
@@ -199,17 +200,20 @@ private[colossus] class Worker(config: WorkerConfig) extends Actor with ActorLog
     case c: IOCommand => handleIOCommand(c)
     case c: WorkerCommand => handleWorkerCommand(c)
     case CheckIdleConnections => {
+      workerItems.idleCheck(WorkerManager.IdleCheckFrequency)
       val time = System.currentTimeMillis
       val timedOut = connections.filter{case (_, con) =>
-        con.handler.idleCheck(WorkerManager.IdleCheckFrequency)
-        con.isTimedOut(time)
-      }.toList
-      timedOut.foreach{case (_, con) =>
-        unregisterConnection(con, DisconnectCause.TimedOut)
+        if (con.isTimedOut(time)) {
+          unregisterConnection(con, DisconnectCause.TimedOut)
+          true
+        } else {
+          false
+        }
       }
       if (timedOut.size > 0) {
         log.debug(s"Terminated ${timedOut.size} idle connections")
       }
+      sender() ! IdleCheckExecuted
     }
     case WorkerManager.RegisterServer(server) => if (!delegators.contains(server.server)){
       try{
@@ -575,7 +579,8 @@ object Worker {
   case class ConnectionSummary(infos: Seq[ConnectionSnapshot])
 
   /** Sent from Servers
-   * @param sc the underlying socketchannel of the connection
+    *
+    * @param sc the underlying socketchannel of the connection
    * @param attempt used when a worker refuses a connection, which can happen if a worker has just restarted and hasn't yet re-registered servers
    */
   private[core] case class NewConnection(sc: SocketChannel, attempt: Int = 1)

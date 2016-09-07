@@ -5,7 +5,7 @@ import java.net.InetSocketAddress
 import akka.pattern.ask
 import akka.util.{ByteString, Timeout}
 import colossus.core._
-import colossus.service.{AsyncServiceClient, ClientConfig}
+import colossus.service.{FutureClient, ClientConfig, Protocol}
 
 import scala.concurrent.{Await, Future, ExecutionContext}
 import scala.concurrent.duration._
@@ -44,7 +44,7 @@ object RawProtocol {
 
   implicit object RawClientLifter extends ClientLifter[Raw, RawClient] {
     
-    def lift[M[_]](client: Sender[Raw,M])(implicit async: Async[M]) = new LiftedClient(client) with RawClient[M]
+    def lift[M[_]](client: Sender[Raw,M])(implicit async: Async[M]) = new BasicLiftedClient(client) with RawClient[M]
   }
 
   object Raw extends ClientFactories[Raw, RawClient]{
@@ -58,10 +58,10 @@ object RawProtocol {
 
   
 
-  implicit object RawCodecProvider extends CodecProvider[Raw] {
+  implicit object RawCodecProvider extends ServiceCodecProvider[Raw] {
     def provideCodec() = RawCodec
 
-    def errorResponse(request: ByteString, reason: Throwable) = ByteString(s"Error (${reason.getClass.getName}): ${reason.getMessage}")
+    def errorResponse(error: ProcessingFailure[ByteString]) = ByteString(s"Error (${error.reason.getClass.getName}): ${error.reason.getMessage}")
   }
 
   implicit object RawClientCodecProvider extends ClientCodecProvider[Raw] {
@@ -79,7 +79,7 @@ object TestClient {
     port: Int,
     waitForConnected: Boolean = true,
     connectRetry : RetryPolicy = BackoffPolicy(50.milliseconds, BackoffMultiplier.Exponential(5.seconds))
-  ) : AsyncServiceClient[ByteString, ByteString] = {
+  ) : FutureClient[Raw] = {
     val config = ClientConfig(
       name = "/test",
       requestTimeout = 100.milliseconds,
@@ -88,18 +88,18 @@ object TestClient {
       failFast = true,
       connectRetry = connectRetry
     )
-    val client = AsyncServiceClient[Raw](config)(RawClientCodecProvider, io)
+    val client = FutureClient[Raw](config)(RawClientCodecProvider, io)
     if (waitForConnected) {
       TestClient.waitForConnected(client)
     }
     client
   }
 
-  def waitForConnected[I,O](client: AsyncServiceClient[I,O], maxTries: Int = 10) {
+  def waitForConnected[P <: Protocol](client: FutureClient[P], maxTries: Int = 10) {
     waitForStatus(client, ConnectionStatus.Connected, maxTries)
   }
 
-  def waitForStatus[I,O](client: AsyncServiceClient[I, O], status: ConnectionStatus, maxTries: Int = 5) {
+  def waitForStatus[P <: Protocol](client: FutureClient[P], status: ConnectionStatus, maxTries: Int = 5) {
     var tries = maxTries
     var last = Await.result(client.connectionStatus, 10.seconds)
     while (last != status) {
@@ -119,7 +119,7 @@ object TestUtil {
   def expectServerConnections(server: ServerRef, connections: Int, maxTries: Int = 10) {
     var tries = maxTries
     implicit val timeout = Timeout(100.milliseconds)
-    while (Await.result((server.server ? Server.GetInfo), 100.milliseconds) != Server.ServerInfo(connections, ServerStatus.Bound)) {
+    while (Await.result(server.info(), 100.milliseconds) != Server.ServerInfo(connections, ServerStatus.Bound)) {
       Thread.sleep(100)
       tries -= 1
       if (tries == 0) {

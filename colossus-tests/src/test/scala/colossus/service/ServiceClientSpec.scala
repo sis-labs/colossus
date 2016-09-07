@@ -20,26 +20,25 @@ import UnifiedProtocol._
 import scala.concurrent.Await
 
 import RawProtocol._
+import org.scalamock.scalatest.MockFactory
 
-import org.scalatest.Tag
-
-class ServiceClientSpec extends ColossusSpec {
+class ServiceClientSpec extends ColossusSpec with MockFactory {
 
   //TODO: we no longer need to return a triple, just the connection, as the others are members
   def newClient(
-    failFast: Boolean = false, 
-    maxSentSize: Int = 10, 
+    failFast: Boolean = false,
+    maxSentSize: Int = 10,
     connectRetry: RetryPolicy = BackoffPolicy(50.milliseconds, BackoffMultiplier.Exponential(5.seconds)),
     requestTimeout: Duration = 10.seconds
   ): (MockConnection, ServiceClient[Redis], TestProbe) = {
     val address = new InetSocketAddress("localhost", 12345)
     val fakeWorker = FakeIOSystem.fakeWorker
     val config = ClientConfig(
-      address, 
+      address,
       requestTimeout,
-      MetricAddress.Root / "test", 
-      pendingBufferSize = 100, 
-      sentBufferSize = maxSentSize, 
+      MetricAddress.Root / "test",
+      pendingBufferSize = 100,
+      sentBufferSize = maxSentSize,
       failFast = failFast,
       connectRetry = connectRetry
     )
@@ -199,7 +198,7 @@ class ServiceClientSpec extends ColossusSpec {
     "immediately fail requests when pending buffer is full" in {
       val (endpoint, client, probe) = newClient()
       val big = Command(CMD_GET, "hello")
-      val commands = (1 to client.config.pendingBufferSize).map{i => 
+      val commands = (1 to client.config.pendingBufferSize).map{i =>
         Command(CMD_GET, i.toString)
       }
       val shouldFail = Command(CMD_GET, "fail")
@@ -248,11 +247,11 @@ class ServiceClientSpec extends ColossusSpec {
       // sentBuffer size.
       val cmd = Command(CMD_GET, "foo")
       val (endpoint, client, probe) = newClient(true, 1)
-      val cmds = (0 to 3).map{i => 
+      val cmds = (0 to 3).map{i =>
         client.send(cmd).execute()
       }
       val reply = StatusReply("foo")
-      (0 to 3).map{i => 
+      (0 to 3).map{i =>
         endpoint.iterate()
         endpoint.expectOneWrite(cmd.raw)
         endpoint.clearBuffer()
@@ -270,10 +269,10 @@ class ServiceClientSpec extends ColossusSpec {
         case Failure(nope) => throw nope
         case _ => throw new Exception("Bad Response")
       }
+      client.disconnect()
       endpoint.iterate()
       endpoint.expectOneWrite(cmd1.raw)
       endpoint.clearBuffer()
-      client.disconnect()
       endpoint.disconnectCalled must equal(false)
       probe.expectNoMsg(100.milliseconds)
       client.receivedData(rep1.raw)
@@ -334,7 +333,7 @@ class ServiceClientSpec extends ColossusSpec {
 
     "attempts to reconnect when server closes connection" in {
       //try it for real (reacting to a bug with NIO interaction)
-      withIOSystem{implicit sys => 
+      withIOSystem{implicit sys =>
         import protocols.redis._
 
         val reply = StatusReply("LATER LOSER!!!")
@@ -353,7 +352,7 @@ class ServiceClientSpec extends ColossusSpec {
             name = "/test",
             requestTimeout = 1.second
           )
-          val client = AsyncServiceClient[Redis](config)//Redis.futureClient(config)
+          val client = FutureClient[Redis](config)
           TestClient.waitForConnected(client)
           TestUtil.expectServerConnections(server, 1)
           Await.result(client.send(Command("bye")), 500.milliseconds) must equal(reply)
@@ -366,7 +365,7 @@ class ServiceClientSpec extends ColossusSpec {
 
 
     "not attempt reconnect when autoReconnect is false" in {
-      withIOSystem{ implicit io => 
+      withIOSystem{ implicit io =>
         val server = Server.basic("rawwww", TEST_PORT)( new Service[Raw](_){ def handle = {
           case foo => {
             disconnect()
@@ -399,7 +398,7 @@ class ServiceClientSpec extends ColossusSpec {
             connectRetry = BackoffPolicy(50.milliseconds, BackoffMultiplier.Exponential(5.seconds), maxTries = Some(2))
           )
 
-          val client = AsyncServiceClient[Raw](config)
+          val client = FutureClient[Raw](config)
           TestUtil.expectServerConnections(server, 0)
           TestClient.waitForStatus(client, ConnectionStatus.NotConnected)
         }
@@ -409,7 +408,7 @@ class ServiceClientSpec extends ColossusSpec {
     "not try to reconnect if disconnect is called while failing to connect" in {
       val fakeWorker = FakeIOSystem.fakeWorker
       implicit val w = fakeWorker.worker
-      val client = ServiceClient[Raw]("localhost", TEST_PORT)
+      val client = ServiceClient[Raw]("localhost", TEST_PORT, 1.second)
 
       fakeWorker.probe.expectMsgType[WorkerCommand.Bind](100.milliseconds)
       client.setBind()
@@ -447,7 +446,42 @@ class ServiceClientSpec extends ColossusSpec {
       failed must equal(true)
     }
 
+    "timeout requests while waiting to reconnect" taggedAs(org.scalatest.Tag("test")) in {
+      withIOSystem{ implicit io => 
+        val config = ClientConfig(
+          name = "/test",
+          requestTimeout = 100.milliseconds,
+          address = new InetSocketAddress("localhost", TEST_PORT),
+          failFast = false,
+          connectRetry = BackoffPolicy(10.seconds, BackoffMultiplier.Constant)
+        )
+        val client = Raw.futureClient(config)
+        import io.actorSystem.dispatcher
+        val f = client.send(ByteString("blah"))
+        Thread.sleep(350)
+        //beware, a java TimeoutException is NOT what we want, that is simply
+        //the future timing out, which it shouldn't here
+        intercept[RequestTimeoutException] {
+          Await.result(f, 100.milliseconds)
+        }
+      }
+    }
+
+    "work with mocking" in {
+      import protocols.http._
+
+      val c = stub[HttpClient[Callback]]
+
+      val resp = HttpRequest.get("/foo").ok("hello")
+
+      (c.send _) when(HttpRequest.get("/foo")) returns(Callback.successful(resp))
+
+      implicit val executor = FakeIOSystem.testExecutor
+      CallbackAwait.result(c.send(HttpRequest.get("/foo")), 1.second) mustBe resp
+
+    }
+      
+
   }
 }
-
 

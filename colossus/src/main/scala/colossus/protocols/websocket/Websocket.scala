@@ -9,8 +9,8 @@ import akka.util.{ByteString, ByteStringBuilder}
 import java.math.BigInteger
 import java.security.MessageDigest
 import java.util.Random
+import scala.util.{Try, Success, Failure}
 import sun.misc.{BASE64Encoder, BASE64Decoder}
-
 
 object UpgradeRequest {
   import protocols.http._
@@ -27,8 +27,11 @@ object UpgradeRequest {
   }
   
 
-  //todo proper handling of key
-  def unapply(request : HttpRequest): Option[HttpResponse] = {
+  /**
+   * Validate a HttpRequest as a websocket upgrade request, returning the
+   * properly formed response that should be sent back to confirm the upgrade
+   */
+  def validate(request : HttpRequest): Option[HttpResponse] = {
     val headers = request.head.headers
     for {
       cheader   <- headers.firstValue("connection") 
@@ -37,8 +40,8 @@ object UpgradeRequest {
       origin    <- headers.firstValue("origin")
       seckey    <- headers.firstValue("sec-websocket-key")
       secver    <- headers.firstValue("sec-websocket-version") 
-      if (request.head.version == HttpVersion.`1.1`)
-      if (request.head.method == HttpMethod.Get)
+      if (request.head.version  == HttpVersion.`1.1`)
+      if (request.head.method   == HttpMethod.Get)
       if (secver == "13")
       if (uheader.toLowerCase == "websocket")
       if (cheader.toLowerCase.split(",").map{_.trim} contains "upgrade")
@@ -70,7 +73,7 @@ object OpCodes {
 
   def fromHeaderByte(b: Byte) = b & 0x0F
   
-  implicit val byteOrder = java.nio.ByteOrder.nativeOrder()
+  implicit val byteOrder = java.nio.ByteOrder.BIG_ENDIAN
 
 }
 
@@ -79,7 +82,10 @@ object OpCodes {
  */
 case class Header(opcode: Byte, mask: Boolean)
 
-case class Frame(header: Header, payload: ByteString) {
+/**
+ * A Frame represents a single chunk of data sent by either the client or server.
+ */
+case class Frame(header: Header, payload: DataBlock) {
   import OpCodes.byteOrder
 
   def encode(random: Random): DataBuffer = {
@@ -97,14 +103,13 @@ case class Frame(header: Header, payload: ByteString) {
       b putLong(payload.size)
     }
     if (header.mask) {
-      val arr = new Array[Byte](4)
-      random.nextBytes(arr)
-      val mask = ByteString(arr)
-      val masked = Frame.mask(mask, payload)
-      b append mask
-      b append masked
+      val mask = new Array[Byte](4)
+      random.nextBytes(mask)
+      val masked = Frame.mask(DataBlock(mask), payload)
+      b putBytes mask
+      b putBytes masked.data
     } else {
-      b append payload
+      b putBytes payload.data
     }
     DataBuffer(b.result)
   }
@@ -118,16 +123,14 @@ object Frame {
    *
    * mask must be 4 bytes long
    */
-  def mask(mask: ByteString, payload: ByteString): ByteString = {
-    val builder = new ByteStringBuilder
-    builder.sizeHint(payload.size)
+  def mask(mask: DataBlock, payload: DataBlock): DataBlock = {
+    val build = new Array[Byte](payload.length)
     var index = 0
-    payload.foreach{ b: Byte =>
-      builder putByte (b ^ (mask(index % 4).toByte)).toByte
+    while (index < payload.length) {
+      build(index) = (payload(index) ^ (mask(index % 4).toByte)).toByte
       index += 1
     }
-    builder.result
-
+    DataBlock(build)
   }
 
 }
@@ -141,7 +144,7 @@ object FrameParser {
    * When the mask bit is set (always from client messages) we need to XOR the
    * n-th data byte with the (n mod 4)th mask byte
    */
-  def unmask(isMasked: Boolean, data: ByteString): ByteString = if (!isMasked) data else {
+  def unmask(isMasked: Boolean, data: DataBlock): DataBlock = if (!isMasked) data else {
     val mask = data.take(4)
     val payload = data.drop(4)
     Frame.mask(mask, payload)
@@ -155,30 +158,26 @@ object FrameParser {
     val payloadLen = head(1) & 0x7F //toss the first bit, len is 7 bits
     val mask = (head(1) & 0x80) == 0x80
     val maskKeyBytes = if (mask) 4 else 0
-    val p: Parser[ByteString] = if (payloadLen == 0x7E) {
-      bytes(short >> {_.toLong + maskKeyBytes})
+    val p: Parser[Array[Byte]] = if (payloadLen == 0x7E) {
+      bytes(short >> {_ + maskKeyBytes})
     } else if (payloadLen == 0x7F) {
-      bytes(long >> {_ + maskKeyBytes})
+      bytes(long >> {_.toInt + maskKeyBytes})
     } else {
       bytes(payloadLen + maskKeyBytes)
     }
-    p >> {data => DecodedResult.Static(Frame(Header(opcode.toByte, mask), unmask(mask,data)))}
+    p >> {data => DecodedResult.Static(Frame(Header(opcode.toByte, mask), unmask(mask,DataBlock(data))))}
   }
 }
 
-abstract class WebsocketHandler(context: Context) extends Controller(new WebsocketCodec, ControllerConfig(50, scala.concurrent.duration.Duration.Inf), context) {
+abstract class BaseWebsocketHandler(context: Context, config: ControllerConfig)
+  extends Controller(new WebsocketCodec, config, context) {
 
-  def send(bytes: ByteString) {
-    push(Frame(Header(OpCodes.Text, false), bytes)){_ => {}}
+  def send(bytes: DataBlock)(postWrite: OutputResult => Unit): Boolean = {
+    //note - as per the spec, server frames are never masked
+    push(Frame(Header(OpCodes.Text, false), bytes))(postWrite)
   }
 
-  def handle: PartialFunction[ByteString, Unit]
-
-  private def fullHandler: PartialFunction[ByteString, Unit] = handle orElse {case _ => {}}
-
-  def processMessage(message: Frame) = {
-    fullHandler(message.payload)
-  }
+  def processMessage(message: Frame)
 
   def preStart(){}
 
@@ -195,3 +194,100 @@ abstract class WebsocketHandler(context: Context) extends Controller(new Websock
   }
 
 }
+
+
+
+/**
+ * A websocket server connection handler that uses a specified sub-protocol.
+ */
+abstract class WebsocketHandler[P <: Protocol](context: Context, config: ControllerConfig)
+(implicit provider: FrameCodecProvider[P]) extends BaseWebsocketHandler(context, config) {
+
+  val wscodec = provider.provideCodec()
+
+  def handle: PartialFunction[P#Input, Unit]
+
+  def handleError(reason: Throwable)
+
+  def sendMessage(message: P#Output)(implicit postWrite: OutputResult => Unit = WebsocketHandler.NoopPostWrite): Boolean =  {
+    send(wscodec.encode(message))(postWrite)
+  }
+
+  def processMessage(frame: Frame) {
+    frame.header.opcode match {
+      case OpCodes.Binary | OpCodes.Text => wscodec.decode(frame.payload) match {
+        case Success(obj) => handle(obj)
+        case Failure(err) => handleError(err)
+      }
+      case OpCodes.Ping => {
+        push(Frame(Header(OpCodes.Pong, false), frame.payload))(WebsocketHandler.NoopPostWrite)
+      }
+      case OpCodes.Close => {
+        disconnect()
+      }
+      case _ => {}
+    }
+  }
+}
+
+object WebsocketHandler {
+  val DefaultConfig = ControllerConfig(1024, scala.concurrent.duration.Duration.Inf)
+
+  val NoopPostWrite: OutputResult => Unit = _ => ()
+}
+
+ 
+abstract class WebsocketServerHandler[P <: Protocol](serverContext: ServerContext, config: ControllerConfig)(implicit provider: FrameCodecProvider[P])
+extends WebsocketHandler[P](serverContext.context, config)(provider) with ServerConnectionHandler {
+
+  def this(serverContext: ServerContext) (implicit provider: FrameCodecProvider[P]) = this(serverContext, WebsocketHandler.DefaultConfig)
+
+  implicit val namespace = serverContext.server.namespace
+
+}
+
+abstract class WebsocketInitializer(val worker: WorkerRef) {
+
+  def onConnect: ServerContext => BaseWebsocketHandler
+
+}
+
+class WebsocketHttpHandler(ctx: ServerContext, websocketInit: WebsocketInitializer, upgradePath: String)
+extends protocols.http.HttpService(ServiceConfig.Default, ctx) {
+  def handle = {
+    case request if (request.head.path == upgradePath) => {
+      val response = UpgradeRequest.validate(request) match {
+        case Some(upgrade) => {
+          become(() => websocketInit.onConnect(ctx))
+          upgrade
+        }
+        case None => {
+          request.badRequest("Invalid upgrade request")
+        }
+      }
+      Callback.successful(response)
+    }
+  }
+}
+
+object WebsocketServer {
+  import protocols.http._
+
+  /**
+   * Start a Websocket server on the specified port.  Since Websocket
+   * connections are upgraded from HTTP connections, this will actually start an
+   * HTTP server and react to Websocket upgrade requests on the path
+   * `upgradePath`, all other paths will 404.
+   */
+  def start(name: String, port: Int, upgradePath: String = "/")(init: WorkerRef => WebsocketInitializer)(implicit io: IOSystem) = {
+    Server.start(name, port){worker => new Initializer(worker) {
+    
+      val websockinit : WebsocketInitializer = init(worker)
+
+      def onConnect = new WebsocketHttpHandler(_, websockinit, upgradePath)
+      
+    }}
+  }
+
+}
+
